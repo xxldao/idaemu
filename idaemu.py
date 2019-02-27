@@ -159,24 +159,54 @@ class Emu(object):
     def _initStackAndArgs(self, uc, RA, args):
         uc.mem_map(self.stack, (self.ssize + 1) * PAGE_ALIGN)
         sp = self.stack + self.ssize * PAGE_ALIGN
-        uc.reg_write(self.REG_SP, sp)
 
+        ## store string or other big data in stack and create a ref
+        ref = [0 for i in range(len(args))]
+        i = 0
+        while i < len(args):
+            print('args[%d]=' % i, args[i], type(args[i]), '%x' % sp)
+            if type(args[i])==type('str'):
+                s = args[i]
+                l = (len(s) + 3 ) & 0xfffc                
+                uc.mem_write(sp-l, s)
+                sp -= l
+                ref[i] = sp 
+                print('store %d bytes into stack, new sp=%x' % (l, sp))
+                #sp -= self.step
+            else:
+                ref[i] = args[i]
+            
+            i += 1
+
+        ## init the arguments
+        #i = 0 ## i dont know how this section readly do, and how to midify, so comment it. 
+        #while i < len(self.REG_ARGS) and i < len(args):
+        #    uc.reg_write(self.REG_ARGS[i], args[i])
+        #    i += 1
+
+        i = len(args)
+        while i > 0:
+            sp -= self.step
+            i -= 1
+            uc.mem_write(sp, pack(self.pack_fmt, ref[i]))
+            print('%x: args[%d]=%x type=' % (sp, i, ref[i]), type(ref[i]))                
+
+        #uc.reg_write(self.REG_SP, sp)
+        sp -= self.step
         if self.REG_RA == 0:
             uc.mem_write(sp, pack(self.pack_fmt, RA))
         else:
             uc.reg_write(self.REG_RA, RA)
 
-        ## init the arguments
-        i = 0
-        while i < len(self.REG_ARGS) and i < len(args):
-            uc.reg_write(self.REG_ARGS[i], args[i])
-            i += 1
-
-        while i < len(args):
-            sp += self.step
-            uc.mem_write(sp, pack(self.pack_fmt, args[i]))
-            i += 1
-
+        uc.reg_write(self.REG_SP, sp)
+        
+        '''#verify stack
+        mem = uc.mem_read(sp & 0xffffff00, 0x100)
+        mem = str(mem)
+        for i in range(0x10):
+            print(mem[i*0x10:(i+1)*0x10].encode('hex'))
+        '''
+        
     def _getBit(self, value, offset):
         mask = 1 << offset
         return 1 if (value & mask) > 0 else 0
