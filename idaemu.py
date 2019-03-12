@@ -28,6 +28,7 @@ class Emu(object):
         self.compiler = compiler
         self.stack = self._alignAddr(stack)
         self.ssize = ssize
+        self.pdata = self._alignAddr(0xee000000) # params for function call
         self.data = []
         self.regs = []
         self.curUC = None
@@ -159,54 +160,57 @@ class Emu(object):
     def _initStackAndArgs(self, uc, RA, args):
         uc.mem_map(self.stack, (self.ssize + 1) * PAGE_ALIGN)
         sp = self.stack + self.ssize * PAGE_ALIGN
+        uc.reg_write(self.REG_SP, sp)
 
-        ## store string or other big data in stack and create a ref
-        ref = [0 for i in range(len(args))]
-        i = 0
-        while i < len(args):
-            print('args[%d]=' % i, args[i], type(args[i]), '%x' % sp)
-            if type(args[i])==type('str'):
-                s = args[i]
-                l = (len(s) + 3 ) & 0xfffc                
-                uc.mem_write(sp-l, s)
-                sp -= l
-                ref[i] = sp 
-                print('store %d bytes into stack, new sp=%x' % (l, sp))
-                #sp -= self.step
-            else:
-                ref[i] = args[i]
-            
-            i += 1
-
-        ## init the arguments
-        #i = 0 ## i dont know how this section readly do, and how to midify, so comment it. 
-        #while i < len(self.REG_ARGS) and i < len(args):
-        #    uc.reg_write(self.REG_ARGS[i], args[i])
-        #    i += 1
-
-        i = len(args)
-        while i > 0:
-            sp -= self.step
-            i -= 1
-            uc.mem_write(sp, pack(self.pack_fmt, ref[i]))
-            print('%x: args[%d]=%x type=' % (sp, i, ref[i]), type(ref[i]))                
-
-        #uc.reg_write(self.REG_SP, sp)
-        sp -= self.step
+        # RA = return address?
         if self.REG_RA == 0:
             uc.mem_write(sp, pack(self.pack_fmt, RA))
         else:
             uc.reg_write(self.REG_RA, RA)
 
-        uc.reg_write(self.REG_SP, sp)
+        ## count for string (char*) data
+        ref = [0 for i in range(len(args))]
+        nParams=0
+        for i in range(len(args)):
+            if type(args[i]) == type('str'):
+                nParams += (len(args[i])+3) & 0xfffffffc
+            else:
+                print('ref[%d] = ' % i, args[i])
+                ref[i] = args[i]
+
+        ## allocate memory for Params
+        if nParams != 0:
+            #print('mem_map=%x, len=%x' % (self.pdata, self._alignAddr(nParams) + PAGE_ALIGN))
+            uc.mem_map(self.pdata, self._alignAddr(nParams) + PAGE_ALIGN)
+            pdata = self.pdata
+            for i in range(len(args)):
+                if type(args[i]) == type('str'):
+                    print('write param to %x = ' % pdata, args[i])
+                    uc.mem_write(pdata, args[i])
+                    ref[i] = pdata
+                    pdata += (len(args[i])+3) & 0xfffffffc
         
+        ## init the arguments, first assign Regs
+        i = 0
+        while i < len(self.REG_ARGS) and i < len(args):
+            #print('arg[%d] = ' % i, args[i], hex(ref[i]))
+            uc.reg_write(self.REG_ARGS[i], ref[i])
+            i += 1
+
+        #second push into stack
+        while i < len(args):
+            sp += self.step
+            #print('arg[%d] = ' % i, args[i], hex(ref[i]))
+            uc.mem_write(sp, pack(self.pack_fmt, ref[i]))
+            i += 1
+
         '''#verify stack
         mem = uc.mem_read(sp & 0xffffff00, 0x100)
         mem = str(mem)
         for i in range(0x10):
             print(mem[i*0x10:(i+1)*0x10].encode('hex'))
         '''
-        
+
     def _getBit(self, value, offset):
         mask = 1 << offset
         return 1 if (value & mask) > 0 else 0
